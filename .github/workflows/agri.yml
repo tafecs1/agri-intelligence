@@ -1,0 +1,86 @@
+name: Agri Intelligence
+
+on:
+  schedule:
+    - cron: "30 20 * * 0"          # every Sunday 20:30 UTC = Monday 02:00 IST (full run, all India)
+  workflow_dispatch:                # "Run workflow" button
+    inputs:
+      cells:
+        description: "Cells to run, e.g. 1-14,17 (empty = all, same as Colab Run all)"
+        required: false
+        default: ""
+      states:
+        description: "Test on some states only, e.g. TAMIL NADU (empty = all India)"
+        required: false
+        default: ""
+
+concurrency:
+  group: agri-intelligence
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355             # GitHub-hosted limit is 6 h; checkpoints are cached so a re-run resumes the same day
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: |
+          pip install -r requirements.txt
+          pip freeze > pip-freeze.txt
+
+      - name: Restore downloads + checkpoints
+        uses: actions/cache/restore@v4
+        with:
+          path: work/
+          key: agri-work-${{ github.run_id }}
+          restore-keys: agri-work-
+
+      - name: Run notebook cells
+        env:
+          PYTHONUNBUFFERED: "1"
+          AGRI_CELLS: ${{ inputs.cells }}
+          AGRI_STATES: ${{ inputs.states }}
+          GEE_KEY: ${{ secrets.GEE_KEY }}
+          SHEETS_KEY: ${{ secrets.SHEETS_KEY }}
+          SHEET_ID_MAIN: ${{ secrets.SHEET_ID_MAIN }}
+          SHEET_ID_VALIDATION: ${{ secrets.SHEET_ID_VALIDATION }}
+          SHEET_ID_TREND: ${{ secrets.SHEET_ID_TREND }}
+          SHEET_ID_TREND_SOWING: ${{ secrets.SHEET_ID_TREND_SOWING }}
+          SHEETS_FOLDER_ID: ${{ secrets.SHEETS_FOLDER_ID }}
+          DATA_GOV_IN_KEY: ${{ secrets.DATA_GOV_IN_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python run.py 2>&1 | tee run-log.txt; exit ${PIPESTATUS[0]}
+
+      - name: Save downloads + checkpoints
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: work/
+          key: agri-work-${{ github.run_id }}
+
+      - name: Sheet links in the run summary
+        if: always()
+        run: |
+          echo "## Google Sheets" >> "$GITHUB_STEP_SUMMARY"
+          cat sheet_links.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "no links (see log)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the run log (public repo - data files are NOT attached; output is in the Google Sheets)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agri-log-${{ github.run_number }}
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            run-log.txt
+            pip-freeze.txt
+            sheet_links.md
