@@ -1,0 +1,102 @@
+--- agri_colab_auto.py (Colab, 16 Nov)
++++ agri_colab_auto.py (GitHub)
+@@ -799,6 +799,10 @@
+ T = finalise_table(to_tehsil_table(g_raw))
+ if len(T) == 0:
+     raise SystemExit("No tehsils found in the layer - see the column list printed above.")
++_ONLY = [x.strip().upper() for x in os.environ.get("AGRI_STATES", "").split(",") if x.strip()]   # [GitHub] test runs only
++if _ONLY:
++    T = T[T["State"].str.upper().isin(_ONLY)].reset_index(drop=True)
++    print(f"TEST MODE - AGRI_STATES={_ONLY}: {len(T):,} tehsils kept (leave AGRI_STATES empty for all India)")
+ META["lgd_rows"], META["lgd_kept"] = len(g_raw), len(T)
+ META["lgd_dup"] = int(T["Tehsil"].str.contains(r" \[").sum())
+ rlog("CELL 3", "LGD sub-districts via bharatlas.com", url, "Tehsil list + boundaries", "OK", len(T),
+@@ -2424,6 +2428,11 @@
+     cands += [f for f in glob.glob("/content/**/*.json", recursive=True)
+               if not re.search(r"gee_|forecast_|elevation_cache|geocode|sample_data|/drive/", f)]
+     cands += glob.glob("/content/drive/MyDrive/*.json") + glob.glob("/content/drive/MyDrive/*/*.json") + glob.glob("*.json")
++    for name in ("GEE_KEY", "GEE_JSON"):                    # [GitHub] Actions secret passed as an environment variable
++        raw = os.environ.get(name, "").strip()
++        info = _load_info(raw) if raw else None
++        if info:
++            return f"environment variable '{name}'", info
+     seen = set()
+     for c in cands:
+         if c in seen or not os.path.isfile(c):
+@@ -2537,6 +2546,8 @@
+                               "https://www.googleapis.com/auth/cloud-platform"])
+         ee.Initialize(creds, project=GEE_PROJECT or GEE_INFO.get("project_id"))
+     else:
++        if os.environ.get("CI"):               # [GitHub] no browser for an interactive login
++            raise RuntimeError("Earth Engine key missing: add the GitHub secret GEE_KEY (whole service-account JSON)")
+         ee.Authenticate()                      # interactive login fallback
+         ee.Initialize(project=GEE_PROJECT)
+     return ee
+@@ -4284,7 +4295,7 @@
+         rlog("Google Sheets", "Google Drive API (convert xlsx)", resp["webViewLink"], title, "OK")
+         return resp["webViewLink"]
+     except ImportError:
+-        print("Not running in Colab - open", xlsx_path, "in Google Drive instead.")
++        return upload_headless(xlsx_path, title)               # [GitHub] service account, fixed Sheet IDs
+     except Exception as e:
+         print(f"Drive upload failed ({type(e).__name__}: {str(e)[:150]}).")
+         SHEET_URLS[title] = None
+@@ -4294,6 +4305,58 @@
+     return None
+ 
+ 
++def _sheet_target(title):
++    """[GitHub] Which fixed Google Sheet a workbook overwrites (IDs come from GitHub secrets / variables)."""
++    for prefix, env in (("Agri Trend Module - E_SOWING", "SHEET_ID_TREND_SOWING"), ("Agri Trend Module", "SHEET_ID_TREND"),
++                        ("Agri Validation India", "SHEET_ID_VALIDATION"), ("Agri Intelligence India", "SHEET_ID_MAIN")):
++        if title.startswith(prefix):
++            return env, os.environ.get(env, "").strip()
++    return "", ""
++
++
++def upload_headless(xlsx_path, title):
++    """[GitHub] Outside Colab: convert the xlsx INTO an existing Google Sheet (owned by you, shared with the service account
++    as Editor), so the link never changes and storage counts to your Drive. Same content as the Colab upload."""
++    env, fid = _sheet_target(title)
++    raw = os.environ.get("SHEETS_KEY", "").strip() or os.environ.get("GEE_KEY", "").strip()
++    folder = os.environ.get("SHEETS_FOLDER_ID", "").strip()
++    if not raw or not (fid or folder):
++        print(f"Google Sheet not updated: set the secrets SHEETS_KEY (or GEE_KEY) and {env or 'SHEET_ID_*'} - "
++              f"{xlsx_path} was not uploaded (see the run log).")
++        SHEET_URLS[title] = None
++        rlog("Google Sheets", "Drive API (service account)", "", title, "SKIPPED", msg=f"missing {env} / key")
++        return None
++    try:
++        from google.oauth2 import service_account
++        from googleapiclient.discovery import build
++        from googleapiclient.http import MediaFileUpload
++        creds = service_account.Credentials.from_service_account_info(json.loads(raw), scopes=["https://www.googleapis.com/auth/drive"])
++        drive = build("drive", "v3", credentials=creds, cache_discovery=False)
++        media = MediaFileUpload(xlsx_path, resumable=True, chunksize=8 * 1024 * 1024,
++                                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
++        if fid:
++            req = drive.files().update(fileId=fid, body={"name": title}, media_body=media, fields="id,webViewLink", supportsAllDrives=True)
++        else:
++            req = drive.files().create(body={"name": title, "mimeType": "application/vnd.google-apps.spreadsheet", "parents": [folder]},
++                                       media_body=media, fields="id,webViewLink", supportsAllDrives=True)
++        resp = None
++        while resp is None:
++            status, resp = req.next_chunk()
++            if status:
++                print(f"  uploaded {int(status.progress() * 100)}%")
++        print("Google Sheet updated:", resp["webViewLink"])
++        SHEET_URLS[title] = resp["webViewLink"]
++        rlog("Google Sheets", "Drive API (service account)", resp["webViewLink"], title, "OK")
++        return resp["webViewLink"]
++    except Exception as e:
++        body = (getattr(getattr(e, "content", b""), "decode", lambda *a: "")("utf-8", "ignore") or str(e))[:200]
++        print(f"Google Sheet update failed ({type(e).__name__}: {body}). Check that {env} is shared with the service account as Editor. "
++              f"{xlsx_path} was not uploaded (see the run log).")
++        SHEET_URLS[title] = None
++        rlog("Google Sheets", "Drive API (service account)", "", title, "FAILED", msg=f"{type(e).__name__}: {body}")
++        return None
++
++
+ SHEET_URL = upload_to_google_sheets()
+ if SPLIT_OUT:
+     VALIDATION_SHEET_URL = upload_to_google_sheets(VALIDATION_FILE, f"Agri Validation India {TODAY}")

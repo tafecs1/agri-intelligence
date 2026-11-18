@@ -1,0 +1,17 @@
+# Same libraries the Colab notebook uses (CELL 1 + Colab's preinstalled ones).
+# After the first successful run, copy pip-freeze.txt (Actions artifact) here to pin exact versions.
+numpy
+pandas
+requests
+openpyxl
+xlrd
+pyarrow
+geopandas
+shapely
+xarray
+netCDF4
+imdlib
+psutil
+earthengine-api
+google-auth
+google-api-python-client
