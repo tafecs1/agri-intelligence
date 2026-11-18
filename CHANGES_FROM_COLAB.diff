@@ -30,7 +30,7 @@
      if irr:
          print("  irrigation / land-use columns used:", irr)
      agg = {"holdings": ("h", "sum"), "area": ("a", "sum")}
-@@ -2155,19 +2162,22 @@
+@@ -2155,19 +2162,23 @@
          if recs and "modal_price" in fields and recs[0].get("report_date"):
              d = str(recs[0]["report_date"])[:10]
              if best is None or d > best[0]:
@@ -43,7 +43,8 @@
 +    latest, host, rid, name, dsuf, mfields = best
      latest = date.fromisoformat(latest)
 +    ds = lambda d: d.isoformat() + dsuf                       # the table stores dates as e.g. 2025-10-26T00:00:00 - filters must match exactly
-+    c_com = "commodity" if "commodity" in mfields else next((f for f in mfields if "commodity" in f.lower()), "commodity")
++    c_com = next((f for f in ("commodity", "commodity_name") if f in mfields), None) or next(
++        (f for f in mfields if "commodity" in f.lower() and not re.search(r"type|code|group", f.lower())), "commodity")   # name, not type/code
 +    print(f"  price table fields: {mfields[:15]}")
      META["mkt_url"] = f"{host}/api/3/action/datastore_search?resource_id={rid}"
      print(f"Mandi prices from portal table '{name[:40]}' - latest report date {latest}")
@@ -58,7 +59,7 @@
          cs = sorted({c for c in cs if c})
      use = [c for c in cs if any(re.search(rx, str(c).lower()) for rx in MKT_REGEX.values())]
      print(f"  commodities in table: {len(cs)} | matched: {use[:20]}{' ...' if len(use) > 20 else ''}")
-@@ -2175,7 +2185,7 @@
+@@ -2175,7 +2186,7 @@
          return
  
      def day_rows(d):
@@ -67,7 +68,7 @@
  
      def frame(rows, tag):
          f = pd.DataFrame(rows)
-@@ -2183,7 +2193,7 @@
+@@ -2183,7 +2194,7 @@
              return f
          for c in ("min_price", "modal_price", "max_price", "arrivals_tonnes"):
              f[c] = pd.to_numeric(f.get(c), errors="coerce")
@@ -76,7 +77,7 @@
          f["S0"], f["D0"] = f["state_name"].map(clean_name), f["district_name"].map(clean_name)
          f["tag"] = tag
          return f.dropna(subset=["Crop"])
-@@ -2424,6 +2434,11 @@
+@@ -2424,6 +2435,11 @@
      cands += [f for f in glob.glob("/content/**/*.json", recursive=True)
                if not re.search(r"gee_|forecast_|elevation_cache|geocode|sample_data|/drive/", f)]
      cands += glob.glob("/content/drive/MyDrive/*.json") + glob.glob("/content/drive/MyDrive/*/*.json") + glob.glob("*.json")
@@ -88,7 +89,7 @@
      seen = set()
      for c in cands:
          if c in seen or not os.path.isfile(c):
-@@ -2537,6 +2552,8 @@
+@@ -2537,6 +2553,8 @@
                                "https://www.googleapis.com/auth/cloud-platform"])
          ee.Initialize(creds, project=GEE_PROJECT or GEE_INFO.get("project_id"))
      else:
@@ -97,7 +98,7 @@
          ee.Authenticate()                      # interactive login fallback
          ee.Initialize(project=GEE_PROJECT)
      return ee
-@@ -2582,7 +2599,8 @@
+@@ -2582,7 +2600,8 @@
              except Exception as e:
                  err = e
                  time.sleep(4 * (attempt + 1))
@@ -107,7 +108,7 @@
              mid = (lo + hi) // 2
              run(lo, mid)
              run(mid, hi)
-@@ -4284,7 +4302,7 @@
+@@ -4284,7 +4303,7 @@
          rlog("Google Sheets", "Google Drive API (convert xlsx)", resp["webViewLink"], title, "OK")
          return resp["webViewLink"]
      except ImportError:
@@ -116,7 +117,7 @@
      except Exception as e:
          print(f"Drive upload failed ({type(e).__name__}: {str(e)[:150]}).")
          SHEET_URLS[title] = None
-@@ -4294,6 +4312,58 @@
+@@ -4294,6 +4313,58 @@
      return None
  
  
@@ -175,7 +176,7 @@
  SHEET_URL = upload_to_google_sheets()
  if SPLIT_OUT:
      VALIDATION_SHEET_URL = upload_to_google_sheets(VALIDATION_FILE, f"Agri Validation India {TODAY}")
-@@ -4490,17 +4560,21 @@
+@@ -4490,17 +4561,21 @@
      col = ee.ImageCollection("MODIS/061/MOD13Q1").select("NDVI")
      rain = ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY").select("precipitation")
      for yi, y in enumerate(YEARS + [CUR]):

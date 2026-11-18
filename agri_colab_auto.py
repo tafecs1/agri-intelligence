@@ -2169,7 +2169,8 @@ def market_from_portal(window_days=7, past_years=5):
     latest, host, rid, name, dsuf, mfields = best
     latest = date.fromisoformat(latest)
     ds = lambda d: d.isoformat() + dsuf                       # the table stores dates as e.g. 2025-10-26T00:00:00 - filters must match exactly
-    c_com = "commodity" if "commodity" in mfields else next((f for f in mfields if "commodity" in f.lower()), "commodity")
+    c_com = next((f for f in ("commodity", "commodity_name") if f in mfields), None) or next(
+        (f for f in mfields if "commodity" in f.lower() and not re.search(r"type|code|group", f.lower())), "commodity")   # name, not type/code
     print(f"  price table fields: {mfields[:15]}")
     META["mkt_url"] = f"{host}/api/3/action/datastore_search?resource_id={rid}"
     print(f"Mandi prices from portal table '{name[:40]}' - latest report date {latest}")
