@@ -1,0 +1,10 @@
+# NEVER commit keys
+*.json
+!.github/**/*.json
+work/
+sheet_links.md
+__pycache__/
+*.xlsx
+*.zip
+*.parquet
+*.csv.gz
