@@ -69,7 +69,7 @@ FONT = "Arial"
 BHARATLAS = "https://bharatlas.com/api/v1"   # open API, no key (LGD boundaries)
 TEHSIL_SOURCE_URL = "https://bharatlas.com/api/dl/admin/subdistricts/LGD_Subdistricts.parquet"  # LGD sub-districts (6,471 polygons)
 GEE_PROJECT = "agri-intelligence-515106"   # your Earth Engine Cloud project; used for the interactive-login fallback when no JSON key is found
-GEE_KEY_FILE = ""           # leave blank: auto-finds agri-intelligence-515106-20a07590f5db*.json (or any service-account key) in /content
+GEE_KEY_FILE = ""           # leave blank: auto-finds focus-cargo-446109-q1-20a07590f5db*.json (or any service-account key) in /content
 IMD_LAG_DAYS = 2            # IMD real-time grids arrive ~1-2 days late
 NORMAL_YEARS = 10           # years of IMD history used for the rainfall normal
 DRY_DAY_MM = 2.5            # a day with less rain than this counts as "dry"
@@ -1975,6 +1975,9 @@ def agc_level(host, rid, level):
     irr = {k: [f for f in names if f in fields] for k, names in
            {"canal": ["canal_ar"], "tank": ["tank_ar"], "net": ["net_irr_ar"], "nsown": ["net_swn_ar"]}.items()}
     irr = {k: v for k, v in irr.items() if v}
+    if "net" in irr and not (pd.to_numeric(df[irr["net"][0]], errors="coerce").fillna(0) > 0).any() and {"w_ir_ar", "p_ir_ar"} <= set(fields):
+        irr["net"] = ["w_ir_ar", "p_ir_ar"]
+        print("  net_irr_ar is empty in this table -> net irrigated = wholly irrigated area (w_ir_ar) + irrigated area of partly irrigated holdings (p_ir_ar)")
     if irr:
         print("  irrigation / land-use columns used:", irr)
     agg = {"holdings": ("h", "sum"), "area": ("a", "sum")}
@@ -2159,19 +2162,22 @@ def market_from_portal(window_days=7, past_years=5):
         if recs and "modal_price" in fields and recs[0].get("report_date"):
             d = str(recs[0]["report_date"])[:10]
             if best is None or d > best[0]:
-                best = (d, host, rid, name)
+                best = (d, host, rid, name, str(recs[0]["report_date"])[10:], fields)
     if not best:
         print("Mandi prices: India Data Portal price table not reachable - MARKET_ECONOMICS stays empty (or add a data.gov.in key).")
         return
-    latest, host, rid, name = best
+    latest, host, rid, name, dsuf, mfields = best
     latest = date.fromisoformat(latest)
+    ds = lambda d: d.isoformat() + dsuf                       # the table stores dates as e.g. 2025-10-26T00:00:00 - filters must match exactly
+    c_com = "commodity" if "commodity" in mfields else next((f for f in mfields if "commodity" in f.lower()), "commodity")
+    print(f"  price table fields: {mfields[:15]}")
     META["mkt_url"] = f"{host}/api/3/action/datastore_search?resource_id={rid}"
     print(f"Mandi prices from portal table '{name[:40]}' - latest report date {latest}")
-    cs = [r["commodity"] for r in (ckan(host, "datastore_search", {
-        "resource_id": rid, "fields": "commodity", "distinct": "true", "limit": 1000}) or {}).get("records", [])]
+    cs = [r.get(c_com) for r in (ckan(host, "datastore_search", {
+        "resource_id": rid, "fields": c_com, "distinct": "true", "limit": 1000}) or {}).get("records", [])]
     if not cs:                                               # 'distinct' query refused by the portal -> read the commodity names from the latest days
         for k in range(window_days):
-            cs += [r_.get("commodity") for r_ in ckan_all(host, rid, {"report_date": [(latest - timedelta(days=k)).isoformat()]})]
+            cs += [r_.get(c_com) for r_ in ckan_all(host, rid, {"report_date": [ds(latest - timedelta(days=k))]})]
         cs = sorted({c for c in cs if c})
     use = [c for c in cs if any(re.search(rx, str(c).lower()) for rx in MKT_REGEX.values())]
     print(f"  commodities in table: {len(cs)} | matched: {use[:20]}{' ...' if len(use) > 20 else ''}")
@@ -2179,7 +2185,7 @@ def market_from_portal(window_days=7, past_years=5):
         return
 
     def day_rows(d):
-        return ckan_all(host, rid, {"report_date": [d.isoformat()], "commodity": use})
+        return ckan_all(host, rid, {"report_date": [ds(d)], c_com: use})
 
     def frame(rows, tag):
         f = pd.DataFrame(rows)
@@ -2187,7 +2193,7 @@ def market_from_portal(window_days=7, past_years=5):
             return f
         for c in ("min_price", "modal_price", "max_price", "arrivals_tonnes"):
             f[c] = pd.to_numeric(f.get(c), errors="coerce")
-        f["Crop"] = f["commodity"].map(lambda x: next((k for k, rx in MKT_REGEX.items() if re.search(rx, str(x).lower())), None))
+        f["Crop"] = f[c_com].map(lambda x: next((k for k, rx in MKT_REGEX.items() if re.search(rx, str(x).lower())), None))
         f["S0"], f["D0"] = f["state_name"].map(clean_name), f["district_name"].map(clean_name)
         f["tag"] = tag
         return f.dropna(subset=["Crop"])
@@ -2469,7 +2475,7 @@ def ask_gee_upload():
         from google.colab import files
     except ImportError:
         return None, None
-    print(">>> Earth Engine key not found. Choose your service-account JSON (e.g. agri-intelligence-515106-....json) "
+    print(">>> Earth Engine key not found. Choose your service-account JSON (e.g. focus-cargo-446109-q1-....json) "
           "in the dialog below, or press Cancel to skip ...")
     try:
         up = files.upload()
@@ -2593,7 +2599,8 @@ def gee_zonal(ee, image, scale, geoms, chunk=100, tag="x", tile=4):
             except Exception as e:
                 err = e
                 time.sleep(4 * (attempt + 1))
-        if hi - lo > 5:
+        transient = re.search(r"time|memory|too many|rate|capacity|quota|429|50\d|computation|aborted|deadline|connection", str(err), re.I)
+        if hi - lo > 5 and transient:
             mid = (lo + hi) // 2
             run(lo, mid)
             run(mid, hi)
@@ -4553,17 +4560,21 @@ def g_irrig(ee, geoms, sq, crop):
     col = ee.ImageCollection("MODIS/061/MOD13Q1").select("NDVI")
     rain = ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY").select("precipitation")
     for yi, y in enumerate(YEARS + [CUR]):
-        bands = []
+        bands, bands_names = [], []
         for m in range(1, 13 if y != CUR else CM):                      # skip the running month (rain not complete)
+            if y == CUR and not (_has_images(ee, col, y, m) and _has_images(ee, rain, y, m)):
+                print(f"  irrigation proxy {y}-{m:02d}: skipped (NDVI or CHIRPS not yet published)")
+                continue
             s = ee.Date.fromYMD(y, m, 1)
             e = s.advance(1, "month")
             nd = col.filterDate(s, e).mean().multiply(0.0001)
             bands.append(nd.gt(IRR_NDVI).And(rain.filterDate(s, e).sum().lt(IRR_RAIN_MM)).rename(f"i{m:02d}"))
+            bands_names.append(f"i{m:02d}")
         if not bands:
             continue
         df = gee_zonal(ee, ee.Image.cat(bands).updateMask(crop), TREND_SCALE, geoms, chunk=100, tag=f"trirr{y}")
         if len(bands) == 1 and "mean" in df.columns:
-            df = df.rename(columns={"mean": "i01"})
+            df = df.rename(columns={"mean": bands_names[0]})
         _fill(TR["irrig"], df, "i", yi)
         tr_save()
         print(f"  irrigation proxy {y}: done")
