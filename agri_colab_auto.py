@@ -68,8 +68,8 @@ FONT = "Arial"
 # --- settings you may edit ---------------------------------------------------
 BHARATLAS = "https://bharatlas.com/api/v1"   # open API, no key (LGD boundaries)
 TEHSIL_SOURCE_URL = "https://bharatlas.com/api/dl/admin/subdistricts/LGD_Subdistricts.parquet"  # LGD sub-districts (6,471 polygons)
-GEE_PROJECT = "focus-cargo-446109-q1"   # your Earth Engine Cloud project; used for the interactive-login fallback when no JSON key is found
-GEE_KEY_FILE = ""           # leave blank: auto-finds focus-cargo-446109-q1-20a07590f5db*.json (or any service-account key) in /content
+GEE_PROJECT = "agri-intelligence-515106"   # your Earth Engine Cloud project; used for the interactive-login fallback when no JSON key is found
+GEE_KEY_FILE = ""           # leave blank: auto-finds agri-intelligence-515106-20a07590f5db*.json (or any service-account key) in /content
 IMD_LAG_DAYS = 2            # IMD real-time grids arrive ~1-2 days late
 NORMAL_YEARS = 10           # years of IMD history used for the rainfall normal
 DRY_DAY_MM = 2.5            # a day with less rain than this counts as "dry"
@@ -2469,7 +2469,7 @@ def ask_gee_upload():
         from google.colab import files
     except ImportError:
         return None, None
-    print(">>> Earth Engine key not found. Choose your service-account JSON (e.g. focus-cargo-446109-q1-....json) "
+    print(">>> Earth Engine key not found. Choose your service-account JSON (e.g. agri-intelligence-515106-....json) "
           "in the dialog below, or press Cancel to skip ...")
     try:
         up = files.upload()
